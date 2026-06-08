@@ -1,0 +1,1129 @@
+Perfect! I can see from your **PatientmangSystemApp** that you're using **Jetpack Navigation Compose** (modern approach). Today I'll teach you **Fragments & Navigation** - the traditional way AND the modern Compose way, so you understand both. This is crucial for interviews!
+
+---
+
+# 🎯 **DAY 2: Fragments & Navigation**
+## **Duration: 1.5 hours (45 min learning + 45 min practice)**
+
+---
+
+## **PART 1: WHAT ARE FRAGMENTS? (15 mins)**
+
+### **Why Do We Need Fragments?**
+
+Imagine your **Patient Management System** (your actual project):
+- You have an Admin dashboard with multiple tabs: Patients, Appointments, Prescriptions, Emergency Alerts
+- Each tab is basically a different screen
+- But they're all part of ONE activity
+
+**Without Fragments:** You'd need 4 separate Activities - wasteful and complex
+**With Fragments:** One Activity + 4 lightweight Fragments = Much better!
+
+### **What is a Fragment?**
+
+A **Fragment** is a reusable piece of UI that lives inside an Activity. Key points:
+
+```
+┌──────────────────────────────────────┐
+│          Activity (Container)        │
+├──────────────────────────────────────┤
+│  Fragment 1  │  Fragment 2           │
+│  (Patient    │  (Appointments)       │
+│   List)      │                       │
+└──────────────────────────────────────┘
+```
+
+- **Fragment != Activity**: Can't stand alone, needs an Activity
+- **Reusable**: Same fragment can be used in multiple activities
+- **Has its own lifecycle**: Similar to Activity but slightly different
+- **Can communicate**: Can pass data to/from other fragments
+- **Lightweight**: Multiple fragments = less memory than multiple activities
+
+---
+
+## **FRAGMENT LIFECYCLE**
+
+Fragments have 9 callbacks (more than activities):
+
+```
+                onAttach()
+                    ↓
+                onCreate()
+                    ↓
+                onCreateView()  ← Create UI here (return root view)
+                    ↓
+                onViewCreated()  ← Initialize views here (safer than onCreateView)
+                    ↓
+                onStart()
+                    ↓
+                onResume()  ← ACTIVE
+                    
+            *** USER USING APP ***
+            
+                onPause()
+                    ↓
+                onStop()
+                    ↓
+                onDestroyView()  ← Views are destroyed
+                    ↓
+                onDestroy()
+                    ↓
+                onDetach()  ← Fragment removed from Activity
+```
+
+### **Key Callbacks Explained:**
+
+| Callback | Purpose | Create UI? |
+|----------|---------|-----------|
+| `onAttach()` | Fragment attached to activity | ❌ |
+| `onCreate()` | Fragment created (one-time setup) | ❌ |
+| `onCreateView()` | Inflate and return the UI layout | ✅ |
+| `onViewCreated()` | View is created, initialize UI components | ✅ |
+| `onStart()` | Fragment becoming visible | ❌ |
+| `onResume()` | Fragment is active | ❌ |
+| `onPause()` | Fragment losing focus | ❌ |
+| `onStop()` | Fragment no longer visible | ❌ |
+| `onDestroyView()` | Views are being destroyed | ❌ |
+| `onDestroy()` | Fragment being destroyed | ❌ |
+| `onDetach()` | Fragment removed from activity | ❌ |
+
+---
+
+## **IMPORTANT DIFFERENCE: Activity vs Fragment**
+
+| Aspect | Activity | Fragment |
+|--------|----------|----------|
+| Can exist alone? | ✅ Yes | ❌ No, needs Activity |
+| Set layout with | `setContentView()` | `LayoutInflater.inflate()` |
+| Get context | `this` | `requireContext()` or `this` |
+| Start another activity | `startActivity()` | `requireActivity().startActivity()` |
+| Back button | Handled automatically | Need to override in Activity |
+| Memory usage | Heavy | Light |
+
+---
+
+## **PART 2: FRAGMENT EXAMPLE (30 mins)**
+
+### **Example: Patient List Fragment**
+
+Let's create a fragment that shows a list of patients (from your Patient Management app):
+
+### **Step 1: Create PatientListFragment.kt**
+
+```kotlin
+package com.example.patientapp.ui.fragments
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Toast
+import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.example.patientapp.R
+import com.example.patientapp.adapters.PatientAdapter
+import com.example.patientapp.data.Patient
+
+class PatientListFragment : Fragment() {
+    
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var patientAdapter: PatientAdapter
+    
+    // Fragment lifecycle - called when fragment is created
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // One-time setup (not UI related)
+    }
+    
+    // Fragment lifecycle - inflate layout and return root view
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        // Inflate the layout for this fragment
+        return inflater.inflate(R.layout.fragment_patient_list, container, false)
+    }
+    
+    // Fragment lifecycle - initialize views AFTER view is created
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        // Now safe to find views
+        recyclerView = view.findViewById(R.id.rv_patients)
+        
+        // Set up RecyclerView
+        recyclerView.layoutManager = LinearLayoutManager(requireContext())
+        
+        // Create adapter with dummy data
+        val patients = listOf(
+            Patient(1, "John Doe", 30, "O+", "9876543210"),
+            Patient(2, "Jane Smith", 28, "B+", "9876543211"),
+            Patient(3, "Mike Johnson", 45, "A+", "9876543212")
+        )
+        
+        patientAdapter = PatientAdapter(patients) { patient ->
+            // Handle patient click
+            Toast.makeText(requireContext(), "Clicked: ${patient.name}", Toast.LENGTH_SHORT).show()
+        }
+        
+        recyclerView.adapter = patientAdapter
+    }
+    
+    override fun onStart() {
+        super.onStart()
+        // Fragment is now visible
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Fragment is active - good place to refresh data
+        loadPatients()
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Pause any operations
+    }
+    
+    override fun onDestroyView() {
+        super.onDestroyView()
+        // Clean up views if needed
+    }
+    
+    private fun loadPatients() {
+        // Fetch patients from database/API
+        // For now, just demo
+        Toast.makeText(requireContext(), "Loading patients...", Toast.LENGTH_SHORT).show()
+    }
+}
+```
+
+### **Step 2: Create Layout for Fragment**
+
+**fragment_patient_list.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+    
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_patients"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</LinearLayout>
+```
+
+### **Step 3: Patient Adapter**
+
+```kotlin
+package com.example.patientapp.adapters
+
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
+import com.example.patientapp.R
+import com.example.patientapp.data.Patient
+
+class PatientAdapter(
+    private val patients: List<Patient>,
+    private val onPatientClick: (Patient) -> Unit
+) : RecyclerView.Adapter<PatientAdapter.PatientViewHolder>() {
+    
+    inner class PatientViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val nameText: TextView = itemView.findViewById(R.id.tv_name)
+        val ageText: TextView = itemView.findViewById(R.id.tv_age)
+        val bloodText: TextView = itemView.findViewById(R.id.tv_blood_group)
+        
+        fun bind(patient: Patient) {
+            nameText.text = patient.name
+            ageText.text = "Age: ${patient.age}"
+            bloodText.text = "Blood: ${patient.bloodGroup}"
+            
+            itemView.setOnClickListener {
+                onPatientClick(patient)
+            }
+        }
+    }
+    
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PatientViewHolder {
+        val itemView = LayoutInflater.from(parent.context)
+            .inflate(R.layout.item_patient, parent, false)
+        return PatientViewHolder(itemView)
+    }
+    
+    override fun onBindViewHolder(holder: PatientViewHolder, position: Int) {
+        holder.bind(patients[position])
+    }
+    
+    override fun getItemCount() = patients.size
+}
+```
+
+### **Step 4: Patient Data Class**
+
+```kotlin
+package com.example.patientapp.data
+
+data class Patient(
+    val id: Int,
+    val name: String,
+    val age: Int,
+    val bloodGroup: String,
+    val phone: String
+)
+```
+
+---
+
+## **PART 3: NAVIGATION BETWEEN FRAGMENTS (30 mins)**
+
+Now, let's learn how to navigate from one fragment to another. There are **2 main ways**:
+
+### **Way 1: Traditional FragmentManager (Older)**
+
+```kotlin
+// In Activity or Fragment
+supportFragmentManager.beginTransaction()
+    .replace(R.id.fragment_container, PatientListFragment())
+    .addToBackStack(null)  // Add to back stack so back button works
+    .commit()
+```
+
+### **Way 2: Jetpack Navigation (Modern - RECOMMENDED)**
+
+Your **PatientmangSystemApp** uses this! It's much cleaner.
+
+#### **What is Jetpack Navigation?**
+
+A system that:
+- Manages fragment transactions automatically
+- Handles back navigation
+- Passes data between fragments safely
+- Creates navigation graphs (visual navigation flows)
+
+#### **How to Use Jetpack Navigation:**
+
+### **Step 1: Create Navigation Graph (nav_graph.xml)**
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/patientListFragment">
+    
+    <!-- First fragment -->
+    <fragment
+        android:id="@+id/patientListFragment"
+        android:name="com.example.patientapp.ui.fragments.PatientListFragment"
+        android:label="Patients">
+        
+        <!-- Action to go to detail screen -->
+        <action
+            android:id="@+id/action_patientList_to_patientDetail"
+            app:destination="@id/patientDetailFragment" />
+    </fragment>
+    
+    <!-- Second fragment -->
+    <fragment
+        android:id="@+id/patientDetailFragment"
+        android:name="com.example.patientapp.ui.fragments.PatientDetailFragment"
+        android:label="Patient Details">
+        
+        <!-- Accept arguments -->
+        <argument
+            android:name="patientId"
+            app:type="integer" />
+        
+        <!-- Action to go back -->
+        <action
+            android:id="@+id/action_patientDetail_to_patientList"
+            app:destination="@id/patientListFragment" />
+    </fragment>
+    
+</navigation>
+```
+
+### **Step 2: Use NavController to Navigate**
+
+```kotlin
+// In PatientListFragment - when user clicks a patient
+override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    super.onViewCreated(view, savedInstanceState)
+    
+    recyclerView = view.findViewById(R.id.rv_patients)
+    recyclerView.layoutManager = LinearLayoutManager(requireContext())
+    
+    val patients = listOf(
+        Patient(1, "John Doe", 30, "O+", "9876543210"),
+        Patient(2, "Jane Smith", 28, "B+", "9876543211")
+    )
+    
+    patientAdapter = PatientAdapter(patients) { patient ->
+        // Use NavController to navigate
+        val navController = NavHostFragment.findNavController(this)
+        
+        // Create action with arguments
+        val action = PatientListFragmentDirections
+            .actionPatientListToPatientDetail(patientId = patient.id)
+        
+        navController.navigate(action)
+    }
+    
+    recyclerView.adapter = patientAdapter
+}
+```
+
+### **Step 3: Receive Arguments in Destination Fragment**
+
+```kotlin
+package com.example.patientapp.ui.fragments
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import androidx.fragment.app.Fragment
+import androidx.navigation.fragment.navArgs
+import com.example.patientapp.R
+
+class PatientDetailFragment : Fragment() {
+    
+    // Safe way to get arguments using navArgs
+    private val args: PatientDetailFragmentArgs by navArgs()
+    
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        return inflater.inflate(R.layout.fragment_patient_detail, container, false)
+    }
+    
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        val patientId = args.patientId  // Get the argument safely!
+        val detailText: TextView = view.findViewById(R.id.tv_patient_detail)
+        
+        detailText.text = "Patient ID: $patientId\nDetails will load here..."
+    }
+}
+```
+
+### **Step 4: Layout for Detail Fragment**
+
+**fragment_patient_detail.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+    
+    <TextView
+        android:id="@+id/tv_patient_detail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+    
+    <Button
+        android:id="@+id/btn_back"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Go Back"
+        android:layout_marginTop="32dp" />
+</LinearLayout>
+```
+
+### **Step 5: Go Back Navigation**
+
+```kotlin
+// In PatientDetailFragment - handle back button
+override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    super.onViewCreated(view, savedInstanceState)
+    
+    val backButton: Button = view.findViewById(R.id.btn_back)
+    backButton.setOnClickListener {
+        // Navigate back using NavController
+        val navController = NavHostFragment.findNavController(this)
+        navController.navigateUp()  // Go back
+    }
+}
+```
+
+### **Step 6: MainActivity Setup**
+
+```kotlin
+package com.example.patientapp
+
+import android.os.Bundle
+import androidx.appcompat.app.AppCompatActivity
+import androidx.navigation.findNavController
+import androidx.navigation.ui.NavigationUI
+import com.example.patientapp.R
+
+class MainActivity : AppCompatActivity() {
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        
+        // Set up navigation
+        val navController = findNavController(R.id.nav_host_fragment)
+        NavigationUI.setupWithNavController(navController, supportActionBar!!)
+    }
+}
+```
+
+### **Step 7: Activity Layout with NavHostFragment**
+
+**activity_main.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+    
+    <!-- NavHostFragment holds all fragments -->
+    <androidx.fragment.app.NavHostFragment
+        android:id="@+id/nav_host_fragment"
+        android:name="androidx.navigation.fragment.NavHostFragment"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:defaultNavHost="true"
+        app:navGraph="@navigation/nav_graph" />
+</LinearLayout>
+```
+
+---
+
+## **📊 FRAGMENT COMMUNICATION: Passing Data**
+
+### **Method 1: Using Jetpack Navigation (Safest)**
+
+We already showed this above with `navArgs`.
+
+### **Method 2: Using Bundle (Traditional)**
+
+```kotlin
+// Fragment 1: Send data
+val fragment = PatientDetailFragment()
+val bundle = Bundle()
+bundle.putInt("patientId", 42)
+fragment.arguments = bundle
+supportFragmentManager.beginTransaction()
+    .replace(R.id.fragment_container, fragment)
+    .addToBackStack(null)
+    .commit()
+
+// Fragment 2: Receive data
+override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    super.onViewCreated(view, savedInstanceState)
+    
+    val patientId = arguments?.getInt("patientId") ?: -1
+}
+```
+
+### **Method 3: Using ViewModel (Best for Complex Apps)**
+
+```kotlin
+// Shared ViewModel between fragments
+class SharedViewModel : ViewModel() {
+    private val _selectedPatient = MutableLiveData<Patient>()
+    val selectedPatient: LiveData<Patient> = _selectedPatient
+    
+    fun selectPatient(patient: Patient) {
+        _selectedPatient.value = patient
+    }
+}
+
+// Fragment 1: Set data
+val viewModel: SharedViewModel = ViewModelProvider(requireActivity()).get(SharedViewModel::class.java)
+viewModel.selectPatient(patient)
+
+// Fragment 2: Get data
+val viewModel: SharedViewModel = ViewModelProvider(requireActivity()).get(SharedViewModel::class.java)
+viewModel.selectedPatient.observe(viewLifecycleOwner) { patient ->
+    // Update UI
+}
+```
+
+---
+
+## **FRAGMENT vs JETPACK COMPOSE Navigation**
+
+### **Your PatientmangSystemApp Uses Compose Navigation:**
+
+Since you're using **Jetpack Compose**, the navigation is different:
+
+```kotlin
+// In your composable
+@Composable
+fun AdminDashboardScreen(
+    onNavigateTo: (String) -> Unit
+) {
+    Button(onClick = { 
+        onNavigateTo("patient_list")  // Navigate to patient list
+    }) {
+        Text("View Patients")
+    }
+}
+
+// Route definition
+sealed class Route(val path: String) {
+    object AdminDashboard : Route("admin_dashboard")
+    object PatientList : Route("patient_list")
+    object PatientDetail : Route("patient_detail/{patientId}") {
+        fun createRoute(patientId: Int) = "patient_detail/$patientId"
+    }
+}
+
+// NavHost setup
+@Composable
+fun NavGraph() {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = Route.AdminDashboard.path) {
+        composable(Route.AdminDashboard.path) {
+            AdminDashboardScreen { destination ->
+                navController.navigate(destination)
+            }
+        }
+        composable(Route.PatientList.path) {
+            PatientListScreen()
+        }
+    }
+}
+```
+
+---
+
+# **PART 4: HANDS-ON PRACTICE (45 mins)**
+
+## **Build a Fragment Navigation App**
+
+### **Project Goal:** Create an app with 3 fragments that navigate between each other
+
+**Fragment 1:** Home (shows list of patients)
+**Fragment 2:** Patient Details (shows patient info)
+**Fragment 3:** Settings (patient preferences)
+
+### **Complete Code Package:**
+
+#### **Step 1: gradle dependencies**
+
+```gradle
+dependencies {
+    // Navigation
+    implementation 'androidx.navigation:navigation-fragment-ktx:2.7.5'
+    implementation 'androidx.navigation:navigation-ui-ktx:2.7.5'
+    
+    // Fragment
+    implementation 'androidx.fragment:fragment-ktx:1.6.2'
+    
+    // RecyclerView
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+}
+```
+
+#### **Step 2: Data Model**
+
+```kotlin
+// Patient.kt
+data class Patient(
+    val id: Int,
+    val name: String,
+    val age: Int,
+    val bloodGroup: String,
+    val phone: String
+) : Serializable
+```
+
+#### **Step 3: Navigation Graph**
+
+**res/navigation/nav_graph.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/homeFragment">
+    
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.example.fragmentdemo.fragments.HomeFragment"
+        android:label="Patients">
+        <action
+            android:id="@+id/action_home_to_detail"
+            app:destination="@id/detailFragment" />
+        <action
+            android:id="@+id/action_home_to_settings"
+            app:destination="@id/settingsFragment" />
+    </fragment>
+    
+    <fragment
+        android:id="@+id/detailFragment"
+        android:name="com.example.fragmentdemo.fragments.DetailFragment"
+        android:label="Details">
+        <argument
+            android:name="patientId"
+            app:type="integer" />
+        <argument
+            android:name="patientName"
+            app:type="string" />
+        <action
+            android:id="@+id/action_detail_to_home"
+            app:destination="@id/homeFragment"
+            app:popUpTo="@id/homeFragment"
+            app:popUpToInclusive="true" />
+    </fragment>
+    
+    <fragment
+        android:id="@+id/settingsFragment"
+        android:name="com.example.fragmentdemo.fragments.SettingsFragment"
+        android:label="Settings">
+        <action
+            android:id="@+id/action_settings_to_home"
+            app:destination="@id/homeFragment"
+            app:popUpTo="@id/homeFragment"
+            app:popUpToInclusive="true" />
+    </fragment>
+</navigation>
+```
+
+#### **Step 4: HomeFragment.kt**
+
+```kotlin
+package com.example.fragmentdemo.fragments
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.Toast
+import androidx.fragment.app.Fragment
+import androidx.navigation.fragment.findNavController
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.example.fragmentdemo.R
+import com.example.fragmentdemo.adapters.PatientAdapter
+import com.example.fragmentdemo.data.Patient
+
+class HomeFragment : Fragment() {
+    
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var settingsButton: Button
+    private val navController by lazy { findNavController() }
+    
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        return inflater.inflate(R.layout.fragment_home, container, false)
+    }
+    
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        recyclerView = view.findViewById(R.id.rv_patients)
+        settingsButton = view.findViewById(R.id.btn_settings)
+        
+        setupRecyclerView()
+        
+        settingsButton.setOnClickListener {
+            val action = HomeFragmentDirections.actionHomeToSettings()
+            navController.navigate(action)
+        }
+    }
+    
+    private fun setupRecyclerView() {
+        val patients = listOf(
+            Patient(1, "John Doe", 30, "O+", "9876543210"),
+            Patient(2, "Jane Smith", 28, "B+", "9876543211"),
+            Patient(3, "Mike Johnson", 45, "A+", "9876543212"),
+            Patient(4, "Sarah Lee", 35, "AB+", "9876543213")
+        )
+        
+        recyclerView.layoutManager = LinearLayoutManager(requireContext())
+        
+        val adapter = PatientAdapter(patients) { patient ->
+            Toast.makeText(requireContext(), "Clicked: ${patient.name}", Toast.LENGTH_SHORT).show()
+            
+            // Navigate to detail with Safe Args
+            val action = HomeFragmentDirections.actionHomeToDetail(
+                patientId = patient.id,
+                patientName = patient.name
+            )
+            navController.navigate(action)
+        }
+        
+        recyclerView.adapter = adapter
+    }
+}
+```
+
+#### **Step 5: DetailFragment.kt**
+
+```kotlin
+package com.example.fragmentdemo.fragments
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.TextView
+import androidx.fragment.app.Fragment
+import androidx.navigation.fragment.findNavController
+import androidx.navigation.fragment.navArgs
+import com.example.fragmentdemo.R
+
+class DetailFragment : Fragment() {
+    
+    // Safe way to get arguments using navArgs
+    private val args: DetailFragmentArgs by navArgs()
+    private val navController by lazy { findNavController() }
+    
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        return inflater.inflate(R.layout.fragment_detail, container, false)
+    }
+    
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        val patientId = args.patientId
+        val patientName = args.patientName
+        
+        val detailText: TextView = view.findViewById(R.id.tv_patient_detail)
+        val backButton: Button = view.findViewById(R.id.btn_back)
+        
+        detailText.text = """
+            Patient Name: $patientName
+            Patient ID: $patientId
+            
+            This is the detail screen.
+            Swipe back or click back button to return.
+        """.trimIndent()
+        
+        backButton.setOnClickListener {
+            navController.navigateUp()
+        }
+    }
+}
+```
+
+#### **Step 6: SettingsFragment.kt**
+
+```kotlin
+package com.example.fragmentdemo.fragments
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.Switch
+import android.widget.Toast
+import androidx.fragment.app.Fragment
+import androidx.navigation.fragment.findNavController
+import com.example.fragmentdemo.R
+
+class SettingsFragment : Fragment() {
+    
+    private val navController by lazy { findNavController() }
+    
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        return inflater.inflate(R.layout.fragment_settings, container, false)
+    }
+    
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        val notificationSwitch: Switch = view.findViewById(R.id.switch_notifications)
+        val homeButton: Button = view.findViewById(R.id.btn_home)
+        
+        notificationSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val status = if (isChecked) "enabled" else "disabled"
+            Toast.makeText(requireContext(), "Notifications $status", Toast.LENGTH_SHORT).show()
+        }
+        
+        homeButton.setOnClickListener {
+            val action = SettingsFragmentDirections.actionSettingsToHome()
+            navController.navigate(action)
+        }
+    }
+}
+```
+
+#### **Step 7: PatientAdapter.kt**
+
+```kotlin
+package com.example.fragmentdemo.adapters
+
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
+import com.example.fragmentdemo.R
+import com.example.fragmentdemo.data.Patient
+
+class PatientAdapter(
+    private val patients: List<Patient>,
+    private val onPatientClick: (Patient) -> Unit
+) : RecyclerView.Adapter<PatientAdapter.PatientViewHolder>() {
+    
+    inner class PatientViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val nameText: TextView = itemView.findViewById(R.id.tv_name)
+        val ageText: TextView = itemView.findViewById(R.id.tv_age)
+        
+        fun bind(patient: Patient) {
+            nameText.text = patient.name
+            ageText.text = "Age: ${patient.age}, Blood: ${patient.bloodGroup}"
+            itemView.setOnClickListener { onPatientClick(patient) }
+        }
+    }
+    
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PatientViewHolder {
+        val itemView = LayoutInflater.from(parent.context)
+            .inflate(R.layout.item_patient, parent, false)
+        return PatientViewHolder(itemView)
+    }
+    
+    override fun onBindViewHolder(holder: PatientViewHolder, position: Int) {
+        holder.bind(patients[position])
+    }
+    
+    override fun getItemCount() = patients.size
+}
+```
+
+#### **Step 8: Layouts**
+
+**fragment_home.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+    
+    <Button
+        android:id="@+id/btn_settings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⚙️ Settings" />
+    
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_patients"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="16dp" />
+</LinearLayout>
+```
+
+**fragment_detail.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+    
+    <TextView
+        android:id="@+id/tv_patient_detail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+    
+    <Button
+        android:id="@+id/btn_back"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="← Go Back"
+        android:layout_marginTop="32dp" />
+</LinearLayout>
+```
+
+**fragment_settings.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+    
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="⚙️ Settings"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+    
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="24dp">
+        
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Enable Notifications" />
+        
+        <Switch
+            android:id="@+id/switch_notifications"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+    
+    <Button
+        android:id="@+id/btn_home"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="← Back to Home"
+        android:layout_marginTop="32dp" />
+</LinearLayout>
+```
+
+**item_patient.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="?attr/selectableItemBackground">
+    
+    <TextView
+        android:id="@+id/tv_name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+    
+    <TextView
+        android:id="@+id/tv_age"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="14sp"
+        android:textColor="@android:color/darker_gray" />
+</LinearLayout>
+```
+
+**activity_main.xml:**
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+    
+    <androidx.fragment.app.NavHostFragment
+        android:id="@+id/nav_host_fragment"
+        android:name="androidx.navigation.fragment.NavHostFragment"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:defaultNavHost="true"
+        app:navGraph="@navigation/nav_graph" />
+</LinearLayout>
+```
+
+#### **Step 9: MainActivity.kt**
+
+```kotlin
+package com.example.fragmentdemo
+
+import android.os.Bundle
+import androidx.appcompat.app.AppCompatActivity
+import androidx.navigation.findNavController
+import androidx.navigation.ui.NavigationUI
+
+class MainActivity : AppCompatActivity() {
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        
+        val navController = findNavController(R.id.nav_host_fragment)
+        NavigationUI.setupWithNavController(navController, supportActionBar!!)
+    }
+}
+```
+
+---
+
+## **🧪 WHAT TO TEST**
+
+1. **Click on any patient** → Should navigate to Detail screen with patient name and ID
+2. **Click "Go Back"** → Should return to Home with animation
+3. **Click Settings** → Should open Settings
+4. **Toggle notification switch** → Should show toast
+5. **Click "Back to Home"** → Should return to Home
+6. **Use back button** → Should navigate correctly
+
+---
+
+## **📝 KEY TAKEAWAYS**
+
+| Topic | Key Point |
+|-------|-----------|
+| **Fragment** | Reusable UI component inside Activity |
+| **Fragment Lifecycle** | `onCreateView()` for UI, `onViewCreated()` for initialization |
+| **Jetpack Navigation** | Modern, safe way to navigate between fragments |
+| **Safe Args** | Type-safe way to pass data between fragments |
+| **NavController** | The object that handles navigation actions |
+| **Back Stack** | Automatic handling with Jetpack Navigation |
+
+---
+
+## **HOW THIS APPLIES TO YOUR PROJECTS**
+
+Your **PatientmangSystemApp** uses Jetpack Compose navigation, but the concepts are the same:
+- Multiple screens (like fragments in traditional Android)
+- Navigation between screens
+- Passing data between screens
+- Back navigation
+
+---
+
+**Day 2 Complete! ✅**
+
+**Tomorrow (Day 3):** Services & Background Tasks - How to run long operations without blocking the UI
+
+---
+
+Have you created and tested the Fragment Navigation app? Try these scenarios:
+1. Navigate to patient detail and observe back stack behavior
+2. Rotate your phone - notice the fragment state is preserved!
+3. Try navigating to Settings and back multiple times
+
+Let me know if you have questions! 🚀

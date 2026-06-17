@@ -1,0 +1,395 @@
+# 🎯 Day 20: Hybrid Search (Semantic + Keyword)
+
+## Duration: 1.5 hours | 30 min Concepts → 30 min Practice → 30 min Interview Angle
+
+---
+
+## Part 1: Concepts (30 mins)
+
+### First — What's the Problem With Pure Semantic Search?
+
+You built a RAG pipeline in Day 19 using semantic search. It works great — but it has one blind spot that will hurt you in production.
+
+Let's say your Fact-Checker knowledge base has this document:
+
+```
+"MS Dhoni hit a six off Nuwan Kulasekara to win 
+ the 2011 ICC World Cup final for India."
+```
+
+Now a user submits these two queries:
+
+```
+Query A: "Who won the cricket championship?"
+         → Semantic search FINDS it ✅
+           (same concept, different words)
+
+Query B: "MS Dhoni 2011 six"
+         → Semantic search might MISS it ❌
+           (specific names + numbers get diluted 
+            inside the embedding vector)
+```
+
+**Why does Query B fail?** Because an embedding model converts the entire sentence into one vector. That vector is a blurry average of all the words. Specific names like "MS Dhoni" and numbers like "2011" don't get strong individual representation — they get averaged out with everything else.
+
+**This is exactly the problem in your Fact-Checker.** Claims contain specific entities — person names, years, statistics, amounts. Pure semantic search is weak at these.
+
+---
+
+### The Two Search Types Side by Side
+
+```
+SEMANTIC SEARCH                   KEYWORD SEARCH (BM25)
+───────────────                   ─────────────────────
+Understands meaning               Matches exact words
+
+"cricket championship"      →     "cricket championship"
+finds "World Cup" ✅              finds "World Cup" ❌ (different words)
+
+"MS Dhoni 2011"             →     "MS Dhoni 2011"  
+finds vaguely related ❌          finds exact match ✅
+
+Great for: paraphrases            Great for: names, numbers,
+           concepts               dates, technical terms
+           intent                 exact facts
+```
+
+**Hybrid Search = use both at the same time.** You get the best of both worlds.
+
+---
+
+### What is BM25?
+
+BM25 is the classic keyword search algorithm. It's what search engines used before neural/semantic search existed. Still the best pure keyword baseline today.
+
+The idea behind BM25 is simple:
+
+> A word is important in a document if it appears **a lot in that document** but **rarely across all documents**.
+
+```
+Word: "the"
+  → appears in EVERY document
+  → low importance (IDF is tiny)
+
+Word: "Dhoni"  
+  → appears in FEW documents
+  → high importance (IDF is large)
+  → when it matches, it means a LOT
+```
+
+```python
+from rank_bm25 import BM25Okapi
+
+# Your document chunks
+corpus = [
+    "India won the 2011 World Cup under MS Dhoni",
+    "Dhoni hit a six to win the final",
+    "Sachin played his last World Cup in 2011",
+    "The IPL was founded in 2008 by BCCI",
+    "SpaceX was founded by Elon Musk in 2002",
+]
+
+# BM25 works on individual words — tokenize first
+tokenized = [doc.lower().split() for doc in corpus]
+bm25 = BM25Okapi(tokenized)
+
+# Search
+query = "Dhoni 2011 World Cup"
+scores = bm25.get_scores(query.lower().split())
+
+for doc, score in zip(corpus, scores):
+    print(f"Score {score:.2f} | {doc}")
+
+# Output:
+# Score 3.84 | India won the 2011 World Cup under MS Dhoni  ← winner
+# Score 2.15 | Dhoni hit a six to win the final
+# Score 1.92 | Sachin played his last World Cup in 2011
+# Score 0.00 | The IPL was founded in 2008 by BCCI          ← zero — no matching words
+# Score 0.00 | SpaceX was founded by Elon Musk in 2002      ← zero
+```
+
+Notice the last two get **zero** — no matching words, no score. Semantic search would give them a small positive score. That difference matters.
+
+---
+
+### How Do You Combine Them? — RRF
+
+Now you have two ranked lists — one from semantic, one from BM25. How do you merge them into one final ranking?
+
+**Problem:** Their scores are on completely different scales.
+- Semantic score: 0.0 to 1.0
+- BM25 score: 0 to 10+
+
+You can't just add them. A BM25 score of 3.0 would always overpower a semantic score of 0.8 even though they mean very different things.
+
+**Solution: RRF — Reciprocal Rank Fusion**
+
+RRF ignores the scores entirely. It only looks at **rank positions**.
+
+```
+Formula: score = 1 / (60 + rank)
+
+Why 60? It's a dampening constant.
+It reduces the gap between rank 1 and rank 2
+so one method doesn't completely dominate.
+```
+
+**Example:**
+
+```
+                Semantic rank    BM25 rank    RRF score
+Doc A           #1               #2           1/(60+1) + 1/(60+2) = 0.0323
+Doc B           #3               #1           1/(60+3) + 1/(60+1) = 0.0323
+Doc C           #2               #5           1/(60+2) + 1/(60+5) = 0.0316
+
+→ Doc A and Doc B tie — both consistently ranked high
+→ Doc C loses despite #2 semantic — BM25 says it's only #5
+```
+
+Documents that rank well in **both** methods float to the top. A document that's #1 in one but #20 in the other loses to one that's #3 in both.---
+
+### Choosing the Right Weights
+
+When using LangChain's EnsembleRetriever you set weights — how much to trust each method.
+
+```
+weights = [bm25_weight, semantic_weight]
+# must sum to 1.0
+```
+
+```
+Query type                    Recommended weights
+──────────────────────────    ───────────────────
+Fact-checking (YOUR app)      [0.4, 0.6]
+  → claims have names, dates, numbers
+  → need strong BM25
+
+General Q&A                   [0.3, 0.7]
+  → mostly about concepts
+  → semantic dominates
+
+Code / technical search       [0.5, 0.5]
+  → exact function names matter a lot
+
+Customer support              [0.2, 0.8]
+  → mostly about intent, not exact terms
+```
+
+For your **Agentic Fact-Checker** — a claim like "Did Elon Musk buy Twitter for $44 billion?" contains specific entities everywhere. You want BM25 weight at least 0.4.
+
+---
+
+## Part 2: Practice (30 mins)
+
+Build a side-by-side comparison that shows exactly where pure semantic fails and hybrid wins.
+
+```python
+# hybrid_search_demo.py
+# pip install rank-bm25 sentence-transformers
+#             langchain langchain-community chromadb
+
+import numpy as np
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ── Knowledge base (like your Fact-Checker's indexed docs) ────
+corpus = [
+    "India won the 2011 ICC Cricket World Cup under MS Dhoni.",
+    "Dhoni hit a six off Kulasekara to seal India's victory.",
+    "Sachin Tendulkar finally got his World Cup medal in 2011.",
+    "The IPL was founded in 2008 by the BCCI.",
+    "Mumbai Indians have won the IPL five times.",
+    "SpaceX was founded by Elon Musk in 2002.",
+    "Python programming language was created by Guido van Rossum.",
+    "WhatsApp was acquired by Facebook for $19 billion in 2014.",
+]
+
+# ── Setup ─────────────────────────────────────────────────────
+model = SentenceTransformer('all-MiniLM-L6-v2')
+embeddings = model.encode(corpus).astype('float32')
+
+tokenized = [doc.lower().split() for doc in corpus]
+bm25 = BM25Okapi(tokenized)
+
+# ── RRF implementation ─────────────────────────────────────────
+def rrf(rankings: list[list[int]], k: int = 60) -> list[tuple]:
+    scores = {}
+    for ranked_list in rankings:
+        for rank, idx in enumerate(ranked_list):
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+# ── Compare all 3 methods ──────────────────────────────────────
+def compare(query: str):
+    print(f"\n{'='*55}")
+    print(f"Query: '{query}'")
+    print(f"{'='*55}")
+
+    # Semantic
+    q_emb = model.encode([query]).astype('float32')
+    sem_scores = cosine_similarity(q_emb, embeddings)[0]
+    sem_ranked = np.argsort(sem_scores)[::-1]
+
+    print("\n🔵 Semantic (top 3):")
+    for i in range(3):
+        idx = sem_ranked[i]
+        print(f"  #{i+1} [{sem_scores[idx]:.3f}] {corpus[idx][:65]}")
+
+    # BM25
+    bm25_scores = bm25.get_scores(query.lower().split())
+    bm25_ranked = np.argsort(bm25_scores)[::-1]
+
+    print("\n🟡 BM25 (top 3):")
+    for i in range(3):
+        idx = bm25_ranked[i]
+        print(f"  #{i+1} [{bm25_scores[idx]:.2f}]  {corpus[idx][:65]}")
+
+    # Hybrid RRF
+    fused = rrf([sem_ranked.tolist(), bm25_ranked.tolist()])
+
+    print("\n🟢 Hybrid RRF (top 3):")
+    for rank, (idx, score) in enumerate(fused[:3]):
+        sr = np.where(sem_ranked == idx)[0][0] + 1
+        br = np.where(bm25_ranked == idx)[0][0] + 1
+        print(f"  #{rank+1} (sem#{sr}, bm25#{br}) {corpus[idx][:55]}")
+
+# ── Test queries ───────────────────────────────────────────────
+
+# Case 1: Exact entity — BM25 shines
+compare("MS Dhoni 2011")
+
+# Case 2: Paraphrase — Semantic shines
+compare("who won the cricket championship")
+
+# Case 3: Mixed — real fact-check claim
+compare("Did Dhoni win the World Cup for India in 2011?")
+
+# Case 4: Number-specific — BM25 critical
+compare("19 billion dollar acquisition 2014")
+
+# Case 5: Concept only — semantic dominates
+compare("social media company purchase")
+```
+
+---
+
+### Now Plug Into LangChain — One Line Change From Day 19
+
+```python
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.schema import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_groq import ChatGroq
+import os
+
+# Your documents
+docs = [Document(page_content=text) for text in corpus]
+
+# BM25 retriever
+bm25_ret = BM25Retriever.from_documents(docs)
+bm25_ret.k = 4
+
+# Semantic retriever
+embeddings_lc = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+vectorstore = Chroma.from_documents(docs, embeddings_lc)
+sem_ret = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+# ── Hybrid retriever (the only change from Day 19!) ────────────
+hybrid_retriever = EnsembleRetriever(
+    retrievers=[bm25_ret, sem_ret],
+    weights=[0.4, 0.6]      # 40% BM25, 60% semantic — good for fact-checking
+)
+
+# ── Same chain as Day 19 — nothing else changes ────────────────
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0,
+    api_key=os.environ["GROQ_API_KEY"]
+)
+
+prompt = ChatPromptTemplate.from_template("""
+You are a fact-checker. Use ONLY the context below.
+
+Context: {context}
+
+Claim: {question}
+
+VERDICT: [TRUE / FALSE / INSUFFICIENT EVIDENCE]
+EXPLANATION: [cite specific evidence]
+""")
+
+def format_docs(docs):
+    return "\n\n".join([d.page_content for d in docs])
+
+# Swap retriever → done
+chain = (
+    {"context": hybrid_retriever | format_docs,
+     "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# Test it
+claims = [
+    "MS Dhoni hit a six to win the 2011 World Cup",   # TRUE
+    "IPL was founded in 2005",                         # FALSE
+    "WhatsApp was bought for $19 billion",             # TRUE
+]
+
+for claim in claims:
+    print(f"\nClaim: {claim}")
+    print(chain.invoke(claim))
+```
+
+---
+
+## Part 3: Interview Angle (30 mins)
+
+### Questions You Will Face
+
+**Q: What is hybrid search and why is it better?**
+
+Hybrid search combines semantic vector search with BM25 keyword search. Semantic finds conceptually similar content even with different wording. BM25 finds exact term matches — great for names, numbers, dates. In real-world fact-checking, claims contain both — "Did Dhoni hit a six in 2011?" needs BM25 for "Dhoni" and "2011", but semantic for understanding "hit a six" versus "scored the winning run." Hybrid consistently outperforms either approach alone by 10–20% on retrieval benchmarks.
+
+**Q: What is RRF and why not just average the scores?**
+
+RRF — Reciprocal Rank Fusion — combines ranked lists using rank positions, not raw scores. The formula is 1/(60 + rank) for each list. The reason you can't average raw scores is that BM25 scores (0 to 10+) and semantic scores (0.0 to 1.0) are on completely different scales — averaging would always give BM25 unfair dominance. RRF is scale-invariant because it only cares about position. A document that's #3 in both lists beats one that's #1 in one list and #15 in the other.
+
+**Q: How would you add hybrid search to your Fact-Checker?**
+
+*Your answer:*
+> "I'd replace my current pure semantic retriever with LangChain's EnsembleRetriever combining BM25Retriever and my ChromaDB semantic retriever with weights of 0.4 and 0.6. For fact-checking specifically, claims contain a lot of specific entities — person names, years, dollar amounts — where exact keyword matching is critical. The EnsembleRetriever is a drop-in replacement in my LCEL chain — I only change one line and everything else stays the same."
+
+**Q: How do you pick the right weights?**
+
+> "I'd build an evaluation set of 50–100 test claims where I know which documents should be retrieved. Then I run retrieval at different weight combinations — 0.3/0.7, 0.4/0.6, 0.5/0.5 — and measure Precision@3 for each. The combination with highest Precision@3 wins. For fact-checking I expect 0.4/0.6 or 0.5/0.5 to outperform the typical 0.3/0.7 used in general QA, because factual claims have much higher entity density."
+
+**Q: What is BM25 and how does it differ from TF-IDF?**
+
+Both use term frequency and inverse document frequency, but BM25 adds two improvements. First, saturation — in BM25, a word appearing 10 times has diminishing extra benefit over 5 times. TF-IDF grows linearly, unfairly rewarding repetition. Second, length normalization — BM25 penalizes long documents because a word appearing 5 times in a 100-word doc is more meaningful than in a 5000-word doc. TF-IDF doesn't account for length. These two fixes made BM25 the standard keyword search algorithm for decades.
+
+---
+
+## 📝 Key Takeaways
+
+| Concept | What to Remember |
+|---|---|
+| Pure semantic weakness | Names, numbers, dates get diluted in embedding vectors |
+| BM25 | Keyword search — exact match · zero score if no matching words |
+| RRF | Combines ranked lists by position not score · scale-invariant |
+| k=60 in RRF | Dampens the gap between rank 1 and rank 2 |
+| EnsembleRetriever | LangChain hybrid — one line swap from Day 19 |
+| Weights for Fact-Checker | [0.4, 0.6] — higher BM25 because claims are entity-dense |
+
+---
+
+**Day 20 Complete!**
+
+Tomorrow is **Day 21: RAG Evaluation Metrics** — how to measure if your RAG system actually works with Precision@k, Recall, MRR, NDCG, and the RAGAS framework — so you can back up your Fact-Checker with real numbers in interviews.

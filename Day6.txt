@@ -1,0 +1,497 @@
+# 🎯 Day 21: RAG Evaluation Metrics
+
+## Duration: 1.5 hours | 30 min Concepts → 30 min Practice → 30 min Interview Angle
+
+---
+
+## Part 1: Concepts (30 mins)
+
+### Why Evaluation Matters More Than You Think
+
+Here's a problem most developers never solve: you build a RAG system, it seems to work when you test it manually with 5 queries, you ship it. But how do you actually know it's good? What happens when you change your chunk size from 500 to 300 — did retrieval get better or worse? You can't just "feel" the answer. You need numbers.
+
+**This is exactly what separates a junior candidate from someone who sounds production-ready in an interview.** Anyone can say "I built a RAG system." Very few can say "I measured Precision@3 at 0.84 and improved it to 0.91 by switching chunking strategy."
+
+---
+
+### The Two Halves of RAG Evaluation
+
+A RAG system has two distinct stages, and you must evaluate them **separately**:
+
+```
+Stage 1: RETRIEVAL              Stage 2: GENERATION
+─────────────────               ────────────────────
+Did we find the                 Given the right context,
+right documents?                did the LLM give a good answer?
+
+Metrics:                        Metrics:
+- Precision@k                   - Faithfulness
+- Recall@k                      - Answer relevance
+- MRR                           - Hallucination rate
+- NDCG
+```
+
+If your final answer is wrong, you need to know WHY. Was it because retrieval failed to find the right chunk? Or because retrieval worked but the LLM ignored the context and hallucinated anyway? These need completely different fixes.
+
+---
+
+### Retrieval Metrics — Did We Find the Right Stuff?
+
+#### 1. Precision@k
+
+> Out of the top-k documents I retrieved, how many were actually relevant?
+
+```
+Query: "Did Dhoni hit a six in 2011?"
+
+You retrieve top 5 documents. You know (ground truth) 
+that only 2 of those 5 are actually relevant.
+
+Precision@5 = relevant retrieved / total retrieved
+            = 2 / 5
+            = 0.4
+```
+
+```python
+def precision_at_k(retrieved_ids: list, relevant_ids: set, k: int) -> float:
+    top_k = retrieved_ids[:k]
+    relevant_in_top_k = sum(1 for doc_id in top_k if doc_id in relevant_ids)
+    return relevant_in_top_k / k
+
+# Example
+retrieved = ["doc3", "doc7", "doc1", "doc9", "doc2"]
+relevant = {"doc1", "doc2", "doc5"}  # ground truth — known relevant docs
+
+p_at_3 = precision_at_k(retrieved, relevant, k=3)
+print(f"Precision@3: {p_at_3}")  # doc3,doc7,doc1 → only doc1 relevant → 1/3 = 0.33
+
+p_at_5 = precision_at_k(retrieved, relevant, k=5)
+print(f"Precision@5: {p_at_5}")  # doc1,doc2 relevant in top 5 → 2/5 = 0.4
+```
+
+---
+
+#### 2. Recall@k
+
+> Out of ALL the relevant documents that exist, how many did I actually find in my top-k?
+
+```
+There are 3 relevant docs total in your knowledge base.
+You retrieved 5 docs, and 2 of them happen to be relevant.
+
+Recall@5 = relevant retrieved / total relevant that exist
+         = 2 / 3
+         = 0.67
+```
+
+```python
+def recall_at_k(retrieved_ids: list, relevant_ids: set, k: int) -> float:
+    top_k = set(retrieved_ids[:k])
+    relevant_found = len(top_k & relevant_ids)
+    return relevant_found / len(relevant_ids)
+
+retrieved = ["doc3", "doc7", "doc1", "doc9", "doc2"]
+relevant = {"doc1", "doc2", "doc5"}
+
+r_at_5 = recall_at_k(retrieved, relevant, k=5)
+print(f"Recall@5: {r_at_5}")  # found doc1, doc2 out of 3 total relevant → 2/3 = 0.67
+```
+
+**Precision vs Recall — the classic tradeoff:**
+
+```
+High Precision, Low Recall:
+  Retrieve only 1 doc, it's perfectly relevant
+  Precision@1 = 1.0, but you missed other relevant docs
+
+High Recall, Low Precision:
+  Retrieve 50 docs, all relevant docs are somewhere in there
+  Recall = 1.0, but mostly irrelevant noise
+
+You want BOTH high — that's why k (how many you retrieve) matters
+```
+
+---
+
+#### 3. MRR — Mean Reciprocal Rank
+
+> On average, how high up does the FIRST relevant document appear?
+
+```
+Query 1: first relevant doc at rank 1  → reciprocal rank = 1/1 = 1.0
+Query 2: first relevant doc at rank 3  → reciprocal rank = 1/3 = 0.33
+Query 3: first relevant doc at rank 2  → reciprocal rank = 1/2 = 0.5
+
+MRR = average of all reciprocal ranks
+    = (1.0 + 0.33 + 0.5) / 3
+    = 0.61
+```
+
+```python
+def reciprocal_rank(retrieved_ids: list, relevant_ids: set) -> float:
+    for rank, doc_id in enumerate(retrieved_ids, start=1):
+        if doc_id in relevant_ids:
+            return 1.0 / rank
+    return 0.0  # no relevant doc found at all
+
+def mrr(all_queries_retrieved: list[list], all_queries_relevant: list[set]) -> float:
+    rr_scores = [
+        reciprocal_rank(retrieved, relevant)
+        for retrieved, relevant in zip(all_queries_retrieved, all_queries_relevant)
+    ]
+    return sum(rr_scores) / len(rr_scores)
+
+# Example across 3 test queries
+retrieved_lists = [
+    ["doc1", "doc3", "doc5"],   # relevant doc1 at rank 1
+    ["doc7", "doc2", "doc1"],   # relevant doc1 at rank 3
+    ["doc4", "doc1", "doc9"],   # relevant doc1 at rank 2
+]
+relevant_sets = [{"doc1"}, {"doc1"}, {"doc1"}]
+
+score = mrr(retrieved_lists, relevant_sets)
+print(f"MRR: {score:.3f}")  # 0.611
+```
+
+**MRR is great when you only care about getting ONE good answer fast** — like a search engine showing the first relevant result.
+
+---
+
+#### 4. NDCG — Normalized Discounted Cumulative Gain
+
+This is the most sophisticated metric. It accounts for the fact that **relevance isn't binary** — some documents are highly relevant, some are slightly relevant, and rank position matters (a relevant doc at rank 1 is more valuable than at rank 10).
+
+```
+Imagine each document has a relevance score, not just yes/no:
+  Highly relevant    = 3
+  Somewhat relevant  = 2  
+  Barely relevant    = 1
+  Not relevant       = 0
+
+NDCG rewards:
+  - Higher relevance scores
+  - Relevant docs appearing EARLIER in the list
+```
+
+```python
+import numpy as np
+
+def dcg(relevance_scores: list[float]) -> float:
+    """Discounted Cumulative Gain — relevance discounted by rank position"""
+    return sum(
+        rel / np.log2(rank + 2)   # rank+2 avoids log(1)=0 division issue
+        for rank, rel in enumerate(relevance_scores)
+    )
+
+def ndcg_at_k(retrieved_relevances: list[float],
+              ideal_relevances: list[float], k: int) -> float:
+    actual_dcg = dcg(retrieved_relevances[:k])
+    ideal_dcg = dcg(sorted(ideal_relevances, reverse=True)[:k])
+    return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
+
+# Example: your system retrieved docs with these true relevance scores
+# (in the order they were retrieved)
+retrieved_relevances = [3, 0, 2, 1, 0]   # rank 1 = score 3, rank 2 = score 0, etc.
+
+# Ideal ordering would be [3, 2, 1, 0, 0] — sorted by relevance descending
+ideal_relevances = [3, 2, 1, 0, 0]
+
+score = ndcg_at_k(retrieved_relevances, ideal_relevances, k=5)
+print(f"NDCG@5: {score:.3f}")
+```
+
+**Why NDCG matters for fact-checking:** Not every retrieved document is equally good evidence. A direct Wikipedia statement is "highly relevant" (3), a related but tangential article is "somewhat relevant" (1). NDCG captures this nuance that Precision/Recall can't.
+
+---
+
+### Generation Metrics — Is the LLM's Answer Actually Good?
+
+Even with perfect retrieval, the LLM might still produce a bad answer. These metrics check the generation stage.
+
+#### Faithfulness — Did the LLM Stick to the Context?
+
+> Does the generated answer only use facts that are actually present in the retrieved context, or did it hallucinate extra claims?
+
+```python
+# Simplified faithfulness check using LLM-as-judge
+def check_faithfulness(answer: str, context: str, llm) -> dict:
+    prompt = f"""
+    Context: {context}
+    
+    Answer: {answer}
+    
+    Does the answer contain ONLY information that is supported 
+    by the context? List any claims in the answer NOT found in the context.
+    
+    Respond with:
+    FAITHFUL: [YES/NO]
+    UNSUPPORTED_CLAIMS: [list any, or "none"]
+    """
+    response = llm.invoke(prompt)
+    return response.content
+```
+
+#### Answer Relevance — Does the Answer Actually Address the Question?
+
+```python
+def check_relevance(question: str, answer: str, llm) -> dict:
+    prompt = f"""
+    Question: {question}
+    Answer: {answer}
+    
+    Rate how directly this answer addresses the question on a scale of 1-5.
+    1 = completely irrelevant, 5 = perfectly addresses the question.
+    
+    SCORE: [1-5]
+    REASON: [one sentence]
+    """
+    response = llm.invoke(prompt)
+    return response.content
+```
+
+---
+
+### RAGAS — The Industry Standard Framework
+
+Instead of writing all these metrics by hand, the RAG community uses **RAGAS** (RAG Assessment) — a library specifically built for this.
+
+```python
+# pip install ragas
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+)
+from datasets import Dataset
+
+# Your evaluation dataset — built from real Fact-Checker test cases
+eval_data = {
+    "question": [
+        "Did India win the 2011 Cricket World Cup?",
+        "Was the IPL founded in 2008?",
+    ],
+    "answer": [
+        "Yes, India won the 2011 ICC Cricket World Cup under MS Dhoni's captaincy.",
+        "Yes, the IPL was founded in 2008 by the BCCI.",
+    ],
+    "contexts": [
+        ["India won the 2011 ICC Cricket World Cup under MS Dhoni."],
+        ["The Indian Premier League was founded in 2008 by the BCCI."],
+    ],
+    "ground_truth": [
+        "India won the 2011 World Cup.",
+        "IPL was founded in 2008.",
+    ]
+}
+
+dataset = Dataset.from_dict(eval_data)
+
+results = evaluate(
+    dataset,
+    metrics=[faithfulness, answer_relevancy, context_precision, context_recall]
+)
+
+print(results)
+# {'faithfulness': 0.95, 'answer_relevancy': 0.91, 
+#  'context_precision': 0.88, 'context_recall': 0.93}
+```
+
+This gives you **one command** that evaluates your entire RAG pipeline end-to-end with industry-standard metrics. This is what you'd actually use in a real job.
+
+---
+
+### Putting It All Together — Your Evaluation Pipeline---
+
+## Part 2: Practice (30 mins)
+
+Build a complete evaluation harness for your Fact-Checker — exactly what you'd show an interviewer as proof your system works.
+
+```python
+# fact_checker_eval.py
+# pip install numpy sentence-transformers rank-bm25
+
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ── Your "knowledge base" with known IDs ──────────────────────
+knowledge_base = {
+    "doc1": "India won the 2011 ICC Cricket World Cup under MS Dhoni.",
+    "doc2": "Dhoni hit a six off Kulasekara to win the final.",
+    "doc3": "Sachin Tendulkar got his World Cup medal in 2011.",
+    "doc4": "The IPL was founded in 2008 by the BCCI.",
+    "doc5": "Mumbai Indians have won the IPL five times.",
+    "doc6": "SpaceX was founded by Elon Musk in 2002.",
+    "doc7": "Python was created by Guido van Rossum in 1991.",
+    "doc8": "WhatsApp was acquired by Facebook for $19 billion.",
+}
+
+# ── Test set with GROUND TRUTH relevant docs ───────────────────
+# This is the hard part — you manually label which docs are
+# actually relevant for each test query
+test_set = [
+    {
+        "query": "Did Dhoni win the 2011 World Cup for India?",
+        "relevant_docs": {"doc1", "doc2"}
+    },
+    {
+        "query": "When was IPL founded?",
+        "relevant_docs": {"doc4"}
+    },
+    {
+        "query": "Who founded SpaceX?",
+        "relevant_docs": {"doc6"}
+    },
+    {
+        "query": "How much did Facebook pay for WhatsApp?",
+        "relevant_docs": {"doc8"}
+    },
+]
+
+# ── Setup retrieval ──────────────────────────────────────────
+model = SentenceTransformer('all-MiniLM-L6-v2')
+doc_ids = list(knowledge_base.keys())
+doc_texts = list(knowledge_base.values())
+doc_embeddings = model.encode(doc_texts)
+
+def retrieve(query: str, k: int = 5) -> list[str]:
+    query_emb = model.encode([query])
+    scores = cosine_similarity(query_emb, doc_embeddings)[0]
+    ranked_indices = np.argsort(scores)[::-1][:k]
+    return [doc_ids[i] for i in ranked_indices]
+
+# ── Metric functions ────────────────────────────────────────
+def precision_at_k(retrieved, relevant, k):
+    top_k = retrieved[:k]
+    hits = sum(1 for d in top_k if d in relevant)
+    return hits / k
+
+def recall_at_k(retrieved, relevant, k):
+    top_k = set(retrieved[:k])
+    hits = len(top_k & relevant)
+    return hits / len(relevant)
+
+def reciprocal_rank(retrieved, relevant):
+    for rank, doc in enumerate(retrieved, start=1):
+        if doc in relevant:
+            return 1.0 / rank
+    return 0.0
+
+# ── Run full evaluation ─────────────────────────────────────
+print("="*60)
+print("FACT-CHECKER RETRIEVAL EVALUATION")
+print("="*60)
+
+all_precision_3 = []
+all_recall_3 = []
+all_rr = []
+
+for test in test_set:
+    query = test["query"]
+    relevant = test["relevant_docs"]
+    retrieved = retrieve(query, k=5)
+
+    p3 = precision_at_k(retrieved, relevant, k=3)
+    r3 = recall_at_k(retrieved, relevant, k=3)
+    rr = reciprocal_rank(retrieved, relevant)
+
+    all_precision_3.append(p3)
+    all_recall_3.append(r3)
+    all_rr.append(rr)
+
+    print(f"\nQuery: {query}")
+    print(f"  Retrieved: {retrieved}")
+    print(f"  Relevant (ground truth): {relevant}")
+    print(f"  Precision@3: {p3:.2f} | Recall@3: {r3:.2f} | RR: {rr:.2f}")
+
+# ── Aggregate results ────────────────────────────────────────
+print("\n" + "="*60)
+print("AGGREGATE RESULTS")
+print("="*60)
+print(f"Mean Precision@3: {np.mean(all_precision_3):.3f}")
+print(f"Mean Recall@3:    {np.mean(all_recall_3):.3f}")
+print(f"MRR:              {np.mean(all_rr):.3f}")
+
+# ── Compare chunk strategies (the real test) ───────────────────
+print("\n" + "="*60)
+print("EXPERIMENT: Does k value affect quality?")
+print("="*60)
+
+for k in [1, 3, 5, 8]:
+    precisions = [
+        precision_at_k(retrieve(t["query"], k=k), t["relevant_docs"], k=k)
+        for t in test_set
+    ]
+    print(f"k={k}: Mean Precision@{k} = {np.mean(precisions):.3f}")
+```
+
+### Bonus: Compare Pure Semantic vs Hybrid Using These Metrics
+
+```python
+# Extend this to compare against your Day 20 hybrid retriever
+from rank_bm25 import BM25Okapi
+
+tokenized = [doc.lower().split() for doc in doc_texts]
+bm25 = BM25Okapi(tokenized)
+
+def hybrid_retrieve(query: str, k: int = 5) -> list[str]:
+    # Semantic ranking
+    query_emb = model.encode([query])
+    sem_scores = cosine_similarity(query_emb, doc_embeddings)[0]
+    sem_ranked = list(np.argsort(sem_scores)[::-1])
+
+    # BM25 ranking
+    bm25_scores = bm25.get_scores(query.lower().split())
+    bm25_ranked = list(np.argsort(bm25_scores)[::-1])
+
+    # RRF fusion
+    rrf_scores = {}
+    for ranked in [sem_ranked, bm25_ranked]:
+        for rank, idx in enumerate(ranked):
+            rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (60 + rank + 1)
+
+    sorted_idx = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+    return [doc_ids[idx] for idx, _ in sorted_idx[:k]]
+
+# Compare both approaches on the same test set
+print("\n" + "="*60)
+print("SEMANTIC vs HYBRID — HEAD TO HEAD")
+print("="*60)
+
+sem_precisions, hybrid_precisions = [], []
+for test in test_set:
+    sem_retrieved = retrieve(test["query"], k=3)
+    hybrid_retrieved = hybrid_retrieve(test["query"], k=3)
+
+    sem_p = precision_at_k(sem_retrieved, test["relevant_docs"], k=3)
+    hyb_p = precision_at_k(hybrid_retrieved, test["relevant_docs"], k=3)
+
+    sem_precisions.append(sem_p)
+    hybrid_precisions.append(hyb_p)
+
+print(f"Pure Semantic — Mean Precision@3: {np.mean(sem_precisions):.3f}")
+print(f"Hybrid (RRF)  — Mean Precision@3: {np.mean(hybrid_precisions):.3f}")
+```
+
+
+
+## 📝 Key Takeaways
+
+| Concept | What to Remember |
+|---|---|
+| Two evaluation stages | Retrieval (found right docs?) vs Generation (good answer?) — evaluate separately |
+| Precision@k | Of retrieved docs, how many relevant? — penalizes noise |
+| Recall@k | Of all relevant docs, how many found? — penalizes missing |
+| MRR | How high does the FIRST relevant doc rank, averaged across queries |
+| NDCG | Accounts for graded relevance + rank position — most sophisticated |
+| Faithfulness | Does the answer only use facts from the context? — catches hallucination |
+| RAGAS | Industry-standard library — one function call evaluates everything |
+| Golden test set | Fixed labeled queries — regression test for pipeline changes |
+
+---
+
+**Day 21 Complete!**
+
+Tomorrow is **Day 22: Prompt Engineering** — zero-shot, few-shot, chain-of-thought, structured output formatting, and how to write production-grade prompts for your Fact-Checker that minimize hallucination and maximize consistency.

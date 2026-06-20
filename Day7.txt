@@ -1,0 +1,491 @@
+# 🎯 Day 25: LangGraph & Multi-Agent Systems
+
+## Duration: 1.5 hours | 30 min Concepts → 30 min Practice → 30 min Interview Angle
+
+---
+
+## Part 1: Concepts (30 mins)
+
+### Why a Single Agent Isn't Enough
+
+Day 24's agent worked well for fact-checking — one agent, a few tools, a simple loop. But your **mgmHackthon (ChefAI/NutriBot)** project has **14 agents**. Why would you ever need that many?
+
+Think about what a meal-planning assistant actually has to do:
+
+```
+"Plan me a vegetarian, ₹3000/week meal plan that helps me lose weight"
+
+This single request needs:
+1. Parse user intent (vegetarian? budget? goal?)
+2. Calculate calorie targets (needs user's weight/height/activity)
+3. Check vegetarian constraints (filter recipe database)
+4. Check budget constraints (INR pricing logic)
+5. Generate meal suggestions (needs an LLM call)
+6. Validate nutrition balance (protein/carb/fat ratios)
+7. Format the final response for the Android app
+```
+
+You COULD cram all of this into one giant agent with 7 tools. But that creates a massive, unfocused prompt where the LLM has to juggle calorie math, vegetarian filtering, AND budget logic all at once. Each of these is a distinct sub-problem with its own logic.
+
+**Multi-agent systems split this into specialists** — each agent has ONE clear job, and they hand off work to each other.
+
+```
+Single mega-agent:                  Multi-agent system:
+───────────────────                 ────────────────────
+One agent juggling                  Intent Agent → figures out what user wants
+7 different concerns                Calorie Agent → does the math
+in one prompt                       Diet Filter Agent → vegetarian/vegan rules
+                                     Budget Agent → INR cost logic
+Harder to debug                     Meal Generator Agent → creates suggestions
+Harder to test                      Nutrition Validator Agent → checks balance
+One bug affects everything          Each agent is independently testable
+```
+
+---
+
+### Why LangGraph Instead of Plain LangChain Agents
+
+Day 24's `AgentExecutor` is great for ONE agent looping through tools. But coordinating MULTIPLE agents, each potentially calling the others, with shared state flowing between them — that needs something more structured. This is exactly what **LangGraph** was built for.
+
+```
+LangChain AgentExecutor:           LangGraph:
+─────────────────────────          ──────────
+One agent's loop                   A GRAPH of multiple nodes (agents/functions)
+Linear thought→action→observation  Nodes can branch, loop, run in parallel
+Good for: single-agent tasks       Good for: multi-agent, complex workflows
+```
+
+LangGraph models your application as a **graph** — nodes are units of work (often an agent or a function), and edges define how control flows between them. This is precisely the architecture your ChefAI backend uses with its 14 agents.
+
+---
+
+### The Core Building Blocks of LangGraph
+
+#### 1. State — The Shared Memory Between Agents
+
+Every LangGraph application has a **State** object — a shared dictionary-like structure that flows through every node. Each agent reads from it and writes back to it.
+
+```python
+from typing import TypedDict, Annotated
+from operator import add
+
+class MealPlanState(TypedDict):
+    user_query: str
+    is_vegetarian: bool
+    budget_inr: int
+    calorie_target: int
+    goal: str                      # "weight_loss", "muscle_gain", "maintain"
+    filtered_recipes: list[dict]
+    meal_plan: list[dict]
+    nutrition_summary: dict
+    errors: Annotated[list[str], add]   # Annotated + add = errors ACCUMULATE
+                                          # instead of being overwritten
+```
+
+**Why `Annotated[list[str], add]` matters:** By default, when a node returns a value for a state key, it OVERWRITES the previous value. But for things like an error list, you want to APPEND, not overwrite. The `add` reducer tells LangGraph "combine these instead of replacing."
+
+---
+
+#### 2. Nodes — Each Agent's Job
+
+A node is just a Python function that takes the current state and returns updates to it.
+
+```python
+def intent_parser_agent(state: MealPlanState) -> dict:
+    """Figures out what the user actually wants from their query"""
+    query = state["user_query"]
+    
+    # Call an LLM to extract structured intent
+    parsed = llm.invoke(f"""
+    Extract structured info from this meal planning request:
+    "{query}"
+    
+    Return JSON: is_vegetarian (bool), budget_inr (int), goal (string)
+    """)
+    
+    extracted = json.loads(parsed.content)
+    
+    return {
+        "is_vegetarian": extracted["is_vegetarian"],
+        "budget_inr": extracted["budget_inr"],
+        "goal": extracted["goal"]
+    }
+    # LangGraph merges this dict INTO the existing state automatically
+
+
+def calorie_calculator_agent(state: MealPlanState) -> dict:
+    """Calculates target calories based on goal"""
+    goal = state["goal"]
+    
+    if goal == "weight_loss":
+        target = 1800
+    elif goal == "muscle_gain":
+        target = 2800
+    else:
+        target = 2200
+    
+    return {"calorie_target": target}
+
+
+def diet_filter_agent(state: MealPlanState) -> dict:
+    """Filters recipe database based on vegetarian constraint"""
+    is_veg = state["is_vegetarian"]
+    
+    all_recipes = load_recipe_database()
+    filtered = [r for r in all_recipes if r["is_vegetarian"] == is_veg]
+    
+    return {"filtered_recipes": filtered}
+
+
+def budget_filter_agent(state: MealPlanState) -> dict:
+    """Further filters recipes that fit within budget"""
+    recipes = state["filtered_recipes"]
+    budget = state["budget_inr"]
+    
+    weekly_budget_per_meal = budget / 21  # 3 meals x 7 days
+    affordable = [r for r in recipes if r["cost_inr"] <= weekly_budget_per_meal]
+    
+    return {"filtered_recipes": affordable}
+```
+
+Notice each agent does ONE thing and returns a small, focused update to the shared state.
+
+---
+
+#### 3. Edges — Defining the Flow
+
+Edges connect nodes and determine execution order. There are two types: **normal edges** (always go from A to B) and **conditional edges** (go to A or B depending on the state).
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+# ── Build the graph ──────────────────────────────────────────
+graph = StateGraph(MealPlanState)
+
+# Add all your agent nodes
+graph.add_node("intent_parser", intent_parser_agent)
+graph.add_node("calorie_calculator", calorie_calculator_agent)
+graph.add_node("diet_filter", diet_filter_agent)
+graph.add_node("budget_filter", budget_filter_agent)
+graph.add_node("meal_generator", meal_generator_agent)
+graph.add_node("nutrition_validator", nutrition_validator_agent)
+
+# ── Normal edges — always flow this way ─────────────────────
+graph.add_edge(START, "intent_parser")
+graph.add_edge("intent_parser", "calorie_calculator")
+graph.add_edge("calorie_calculator", "diet_filter")
+graph.add_edge("diet_filter", "budget_filter")
+graph.add_edge("budget_filter", "meal_generator")
+
+# ── Conditional edge — branches based on state ──────────────
+def check_nutrition_balance(state: MealPlanState) -> str:
+    """Decides next step based on whether nutrition is balanced"""
+    if state["nutrition_summary"]["is_balanced"]:
+        return "end"
+    else:
+        return "regenerate"
+
+graph.add_node("nutrition_validator", nutrition_validator_agent)
+graph.add_edge("meal_generator", "nutrition_validator")
+
+graph.add_conditional_edges(
+    "nutrition_validator",
+    check_nutrition_balance,
+    {
+        "end": END,                         # nutrition is good — finish
+        "regenerate": "meal_generator"      # nutrition is off — loop back!
+    }
+)
+
+# ── Compile the graph into a runnable application ──────────
+app = graph.compile()
+```
+
+This conditional edge is powerful — it means your meal generator can **loop back and try again** if the nutrition validator agent rejects the first attempt. This kind of self-correcting loop is hard to express cleanly in a plain linear chain.---
+
+### The Supervisor Pattern — Coordinating Many Agents
+
+With 14 agents like your ChefAI system, a linear chain of agents isn't always right — sometimes you need a "manager" agent that looks at the request and decides WHICH specialist agents to invoke, similar to how a real team lead delegates tasks.
+
+```python
+from langgraph.graph import StateGraph, START, END
+from typing import Literal
+
+class SupervisorState(TypedDict):
+    user_query: str
+    next_agent: str
+    final_response: str
+    # ... other shared fields
+
+def supervisor_agent(state: SupervisorState) -> dict:
+    """The supervisor decides which specialist agent handles this query"""
+    query = state["user_query"]
+    
+    decision_prompt = f"""
+    Given this user query: "{query}"
+    
+    Which specialist should handle this? Choose ONE:
+    - "meal_planner" — for meal plan / recipe requests
+    - "nutrition_advisor" — for nutrition facts / calorie questions  
+    - "budget_optimizer" — for cost-saving / budget questions
+    
+    Respond with just the specialist name.
+    """
+    decision = llm.invoke(decision_prompt).content.strip()
+    return {"next_agent": decision}
+
+def route_to_specialist(state: SupervisorState) -> str:
+    """This function reads the supervisor's decision and routes accordingly"""
+    return state["next_agent"]
+
+# ── Build graph with supervisor routing ──────────────────────
+graph = StateGraph(SupervisorState)
+
+graph.add_node("supervisor", supervisor_agent)
+graph.add_node("meal_planner", meal_planner_agent)
+graph.add_node("nutrition_advisor", nutrition_advisor_agent)
+graph.add_node("budget_optimizer", budget_optimizer_agent)
+
+graph.add_edge(START, "supervisor")
+
+# Conditional routing based on supervisor's decision
+graph.add_conditional_edges(
+    "supervisor",
+    route_to_specialist,
+    {
+        "meal_planner": "meal_planner",
+        "nutrition_advisor": "nutrition_advisor",
+        "budget_optimizer": "budget_optimizer"
+    }
+)
+
+# All specialists lead to END after their work
+graph.add_edge("meal_planner", END)
+graph.add_edge("nutrition_advisor", END)
+graph.add_edge("budget_optimizer", END)
+
+app = graph.compile()
+```
+
+**This is likely close to how your 14-agent ChefAI system is organized** — a supervisor or router determines which combination of specialist agents actually needs to run for a given user request, rather than always running all 14.
+
+---
+
+### Parallel Agent Execution
+
+Sometimes multiple agents don't depend on each other and can run **simultaneously** rather than one after another — saving real latency.
+
+```python
+# If diet_filter and a separate "allergy_filter" agent are independent,
+# they can run in parallel since neither needs the other's output
+
+graph.add_node("diet_filter", diet_filter_agent)
+graph.add_node("allergy_filter", allergy_filter_agent)
+
+# Both run after intent_parser, independently
+graph.add_edge("intent_parser", "diet_filter")
+graph.add_edge("intent_parser", "allergy_filter")
+
+# Both must finish before budget_filter runs
+graph.add_edge("diet_filter", "budget_filter")
+graph.add_edge("allergy_filter", "budget_filter")
+
+# LangGraph automatically detects these can run in parallel
+# since neither depends on the other's output
+```
+
+For your ChefAI, this matters for latency — if vegetarian filtering and allergy filtering are independent checks, running them in parallel instead of sequentially cuts real response time for the user.
+
+---
+
+### Memory — Checkpointing for Multi-Turn Conversations
+
+LangGraph supports persisting state across multiple invocations using **checkpointers** — useful if a user has a back-and-forth conversation refining their meal plan.
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
+app = graph.compile(checkpointer=memory)
+
+# Each conversation gets a unique thread_id
+config = {"configurable": {"thread_id": "user_42"}}
+
+# First turn
+result1 = app.invoke(
+    {"user_query": "Plan a vegetarian meal for weight loss"},
+    config=config
+)
+
+# Second turn — LangGraph remembers everything from turn 1 automatically
+result2 = app.invoke(
+    {"user_query": "Actually make it non-vegetarian"},
+    config=config
+)
+# The graph picks up with all previous state intact, just updates 
+# the vegetarian flag and re-runs from there
+```
+
+---
+
+## Part 2: Practice (30 mins)
+
+Build a simplified but complete multi-agent meal planning graph mirroring your ChefAI structure.
+
+```python
+# meal_planner_graph.py
+# pip install langgraph langchain-groq
+
+import os
+import json
+from typing import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langchain_groq import ChatGroq
+
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0,
+    api_key=os.environ["GROQ_API_KEY"]
+)
+
+# ── Shared State ──────────────────────────────────────────────
+class MealPlanState(TypedDict):
+    user_query: str
+    is_vegetarian: bool
+    budget_inr: int
+    goal: str
+    calorie_target: int
+    meal_suggestions: list[str]
+    is_balanced: bool
+    retry_count: int
+
+# ── Mock recipe database ─────────────────────────────────────
+RECIPE_DB = [
+    {"name": "Dal Tadka + Rice", "is_vegetarian": True, "cost_inr": 80, "calories": 450},
+    {"name": "Paneer Butter Masala", "is_vegetarian": True, "cost_inr": 120, "calories": 600},
+    {"name": "Chicken Curry + Roti", "is_vegetarian": False, "cost_inr": 150, "calories": 550},
+    {"name": "Vegetable Pulao", "is_vegetarian": True, "cost_inr": 70, "calories": 400},
+    {"name": "Egg Bhurji + Toast", "is_vegetarian": False, "cost_inr": 60, "calories": 350},
+]
+
+# ── Agent 1: Intent Parser ───────────────────────────────────
+def intent_parser_agent(state: MealPlanState) -> dict:
+    print("🔵 [Intent Parser] Analyzing query...")
+    prompt = f"""
+Extract structured info from this request. Respond ONLY with JSON:
+{{"is_vegetarian": true/false, "budget_inr": number, "goal": "weight_loss"|"muscle_gain"|"maintain"}}
+
+Request: "{state['user_query']}"
+"""
+    response = llm.invoke(prompt)
+    cleaned = response.content.strip().strip("```json").strip("```")
+    data = json.loads(cleaned)
+    print(f"   → Extracted: {data}")
+    return data
+
+# ── Agent 2: Calorie Calculator ──────────────────────────────
+def calorie_calculator_agent(state: MealPlanState) -> dict:
+    print("🟣 [Calorie Calculator] Computing target...")
+    goal_map = {"weight_loss": 1800, "muscle_gain": 2800, "maintain": 2200}
+    target = goal_map.get(state["goal"], 2200)
+    print(f"   → Target calories: {target}")
+    return {"calorie_target": target}
+
+# ── Agent 3: Diet + Budget Filter ────────────────────────────
+def filter_agent(state: MealPlanState) -> dict:
+    print("🟢 [Filter Agent] Filtering recipes...")
+    filtered = [
+        r for r in RECIPE_DB
+        if r["is_vegetarian"] == state["is_vegetarian"]
+        and r["cost_inr"] <= state["budget_inr"]
+    ]
+    names = [r["name"] for r in filtered]
+    print(f"   → {len(names)} recipes match: {names}")
+    return {"meal_suggestions": names}
+
+# ── Agent 4: Nutrition Validator (with retry logic) ──────────
+def nutrition_validator_agent(state: MealPlanState) -> dict:
+    print("🟡 [Nutrition Validator] Checking balance...")
+    retry = state.get("retry_count", 0)
+    
+    # Simulate: balanced on first retry to avoid infinite loop in demo
+    is_balanced = len(state["meal_suggestions"]) > 0
+    print(f"   → Balanced: {is_balanced} (retry #{retry})")
+    
+    return {"is_balanced": is_balanced, "retry_count": retry + 1}
+
+# ── Conditional routing function ─────────────────────────────
+def check_balance(state: MealPlanState) -> str:
+    if state["is_balanced"] or state.get("retry_count", 0) >= 2:
+        return "end"
+    return "retry"
+
+# ── Build the graph ───────────────────────────────────────────
+graph = StateGraph(MealPlanState)
+
+graph.add_node("intent_parser", intent_parser_agent)
+graph.add_node("calorie_calculator", calorie_calculator_agent)
+graph.add_node("filter_agent", filter_agent)
+graph.add_node("nutrition_validator", nutrition_validator_agent)
+
+graph.add_edge(START, "intent_parser")
+graph.add_edge("intent_parser", "calorie_calculator")
+graph.add_edge("calorie_calculator", "filter_agent")
+graph.add_edge("filter_agent", "nutrition_validator")
+
+graph.add_conditional_edges(
+    "nutrition_validator",
+    check_balance,
+    {"end": END, "retry": "filter_agent"}
+)
+
+app = graph.compile()
+
+# ── Run it ────────────────────────────────────────────────────
+result = app.invoke({
+    "user_query": "Plan a vegetarian meal plan under ₹100 per meal for weight loss",
+    "retry_count": 0
+})
+
+print(f"\n{'='*60}")
+print("FINAL RESULT")
+print(f"{'='*60}")
+print(f"Calorie Target: {result['calorie_target']}")
+print(f"Meal Suggestions: {result['meal_suggestions']}")
+print(f"Nutrition Balanced: {result['is_balanced']}")
+```
+
+---
+
+## Part 3: Interview Angle (30 mins)
+
+### Questions You Will Face
+
+**Q: Why does your ChefAI project use 14 agents instead of 1?**
+
+*Your answer:*
+> "Meal planning has many distinct sub-problems — parsing user intent, calculating calorie targets, filtering by dietary restrictions, filtering by budget, generating creative meal suggestions, and validating nutritional balance. Each of these is a focused, independently testable concern. Cramming all of this logic into one agent's prompt makes it harder to debug — if the output is wrong, you don't know if it's a calorie math error or a budget filtering error. Splitting into specialist agents means each one has a narrow, well-defined job, and I can test and improve them independently."
+
+**Q: What is LangGraph and how is it different from a regular LangChain agent?**
+
+A regular LangChain `AgentExecutor` implements one agent's loop — it calls tools, observes results, and decides the next tool call, but it's fundamentally one decision-maker. LangGraph models the entire application as a graph of nodes, where each node can be an agent, a function, or even another graph. This lets you express complex workflows — sequential pipelines, conditional branches, parallel execution, and loops — across MULTIPLE agents with shared state flowing between them. It's the right tool when you have multiple specialized agents that need to coordinate, rather than one agent looping through tools.
+
+**Q: Explain the conditional edge and retry loop in your meal planner.**
+
+> "After the meal generator produces suggestions, a nutrition validator agent checks if the macros are balanced. I use a conditional edge — a routing function that reads the validator's output and decides where to go next. If nutrition is balanced, it routes to END. If not, it routes back to the meal generator node to try again, with an incremented retry counter to prevent infinite loops. This creates a self-correcting loop that a plain linear chain can't express — the system can recognize a bad output and automatically retry rather than returning a flawed meal plan to the user."
+
+**Q: What is the Supervisor pattern and when would you use it?**
+
+The Supervisor pattern uses a dedicated agent whose only job is to look at the incoming request and decide which specialist agent(s) should handle it, rather than always running every agent in a fixed sequence. This is useful when you have many specialists but most requests only need a subset of them — for example a "what's the calorie count of dal?" question doesn't need the full meal-planning pipeline, just the nutrition advisor. The supervisor acts like a router, using an LLM call to classify the request and direct it to the right specialist, which saves unnecessary agent calls and reduces latency and cost.
+
+**Q: How would you reduce latency in a 14-agent system like ChefAI?**
+
+> "First I'd identify which agents are truly independent of each other's output and run those in parallel — for example dietary filtering and allergy filtering don't depend on each other, so LangGraph can execute them simultaneously rather than sequentially. Second I'd implement the Supervisor pattern so simple queries don't trigger the full 14-agent pipeline unnecessarily. Third I'd cache results for common sub-tasks — if calorie calculation for a given goal is deterministic, I don't need an LLM call for that, a simple lookup table suffices, reserving LLM calls only for genuinely creative or ambiguous tasks like meal suggestion generation."
+
+**Q: What's a risk of having too many agents in a pipeline?**
+
+> "Compounding latency and cost — each agent that calls an LLM adds round-trip time and API expense, and these add up linearly or worse if there are retry loops. There's also compounding error risk similar to what we discussed with hallucination — if an early agent like intent parsing misclassifies something, every downstream agent inherits that mistake. I'd mitigate this by validating critical state transitions — like confirming extracted intent makes sense before proceeding — and by keeping deterministic logic (like calorie lookup tables) out of LLM calls entirely, reserving the LLM specifically for tasks that genuinely require language understanding or generation."
+
+**Day 25 Complete!**
+
+Tomorrow is **Day 26: Agent Memory Systems** — short-term vs long-term memory, episodic memory, and how your Fact-Checker's Neo4j AuraDB graph functions as a long-term memory system that lets agents learn from and reference past fact-checks.
